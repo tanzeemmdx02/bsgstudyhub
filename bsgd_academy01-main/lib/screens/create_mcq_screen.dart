@@ -470,6 +470,9 @@ class _CreateMcqScreenState extends State<CreateMcqScreen> {
             if (data['institution'] != null && data['institution'].toString().trim().isNotEmpty) {
               _appNameCtrl.text = data['institution'].toString().trim();
             }
+            if (data['address'] != null && data['address'].toString().trim().isNotEmpty) {
+              _addressCtrl.text = data['address'].toString().trim();
+            }
 
             _startDate = _parseDateTime(data['startDate']) ?? DateTime.now();
             _expireDate = _parseDateTime(data['expireDate']) ?? DateTime.now().add(const Duration(days: 7));
@@ -1613,17 +1616,38 @@ Return ONLY valid raw JSON with keys. Do not wrap in markdown or backticks. If a
     }
   }
 
-  Future<void> _exportBengaliPdf(List<QueryDocumentSnapshot> docs) async {
+  Future<void> _exportBengaliPdf(
+    List<QueryDocumentSnapshot> docs, {
+    String? customTitle,
+    String? customDate,
+  }) async {
     if (docs.isEmpty) return;
 
     final appName = _appNameCtrl.text.trim();
     final address = _addressCtrl.text.trim().replaceAll('\n', '<br>');
-    final subject = _subjectCtrl.text.trim().isNotEmpty ? _subjectCtrl.text.trim() : _examTitle;
+    final examTitle = customTitle?.trim().isNotEmpty == true ? customTitle!.trim() : _examTitle;
+    final subject = _subjectCtrl.text.trim().isNotEmpty ? _subjectCtrl.text.trim() : examTitle;
     final className = _classCtrl.text.trim();
-    final fullMark = _fullMarkCtrl.text.trim();
-    final time = _timeCtrl.text.trim();
+    final fullMarkRaw = _fullMarkCtrl.text.trim();
+    final timeRaw = _timeCtrl.text.trim();
+    final examDateStr = customDate?.trim().isNotEmpty == true
+        ? customDate!.trim()
+        : _formatDate(_startDate ?? DateTime.now());
 
-    final isExamBangla = isBanglaText(_examTitle) || isBanglaText(subject);
+    final isExamBangla = isBanglaText(examTitle) || isBanglaText(subject) || isBanglaText(className);
+
+    // Dynamic Labels & Formatted Digits
+    final classLabel = isExamBangla ? 'শ্রেণি' : 'Class';
+    final subjectLabel = isExamBangla ? 'বিষয়' : 'Subject';
+    final markLabel = isExamBangla ? 'পূর্ণমান' : 'Full Marks';
+    final timeLabel = isExamBangla ? 'সময়' : 'Time';
+    final dateLabel = isExamBangla ? 'তারিখ' : 'Date';
+
+    final fullMarkFormatted = isExamBangla ? toBanglaDigits(fullMarkRaw) : fullMarkRaw;
+    final timeFormatted = isExamBangla
+        ? '${toBanglaDigits(timeRaw.replaceAll(RegExp(r'[^০-৯0-9]'), ''))} মিনিট'
+        : '$timeRaw Minutes';
+
     final bnLabels = ['ক', 'খ', 'গ', 'ঘ'];
     final enLabels = ['A', 'B', 'C', 'D'];
     final questionsHtml = StringBuffer();
@@ -1638,7 +1662,7 @@ Return ONLY valid raw JSON with keys. Do not wrap in markdown or backticks. If a
       if (isPassage) {
         questionsHtml.write('''
           <div class="passage-box">
-            <div class="passage-tag">উদ্দীপক</div>
+            <div class="passage-tag">${isExamBangla ? 'উদ্দীপক' : 'Passage'}</div>
             <div class="passage-content">$text</div>
           </div>
         ''');
@@ -1670,12 +1694,12 @@ Return ONLY valid raw JSON with keys. Do not wrap in markdown or backticks. If a
 
     final fullHtml = '''
 <!DOCTYPE html>
-<html lang="bn">
+<html lang="${isExamBangla ? 'bn' : 'en'}">
 <head>
   <meta charset="utf-8">
-  <title>${const HtmlEscape().convert(_examTitle)}</title>
+  <title>${const HtmlEscape().convert(examTitle)}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;600;700;800&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
   <style>
     @page { size: A4 portrait; margin: 15mm 18mm; }
     * { box-sizing: border-box; }
@@ -1687,14 +1711,19 @@ Return ONLY valid raw JSON with keys. Do not wrap in markdown or backticks. If a
       print-color-adjust: exact !important;
     }
     .header { text-align: center; margin-bottom: 12px; }
-    .institution-name { font-size: 21px; font-weight: 800; margin: 0; }
-    .address { font-size: 11px; color: #333; margin: 3px 0 10px; line-height: 1.4; }
+    .institution-name { font-size: 22px; font-weight: 800; margin: 0; }
+    .address { font-size: 11px; color: #333; margin: 3px 0 6px; line-height: 1.4; }
+    .exam-title-badge {
+      font-size: 16px; font-weight: 800; color: #111; margin: 4px 0;
+      letter-spacing: 0.3px;
+    }
     .subject-pill {
       display: inline-block; background: #eeeeee;
-      padding: 3px 16px; border-radius: 4px; font-weight: 700; font-size: 13px;
+      padding: 3px 18px; border-radius: 4px; font-weight: 700; font-size: 13.5px;
+      margin-top: 4px;
     }
     .meta-row {
-      display: flex; justify-content: space-between; font-size: 13px;
+      display: flex; justify-content: space-between; font-size: 12.5px;
       font-weight: 600; margin-top: 10px; padding-bottom: 6px;
       border-bottom: 1.5px solid #000;
     }
@@ -1718,12 +1747,14 @@ Return ONLY valid raw JSON with keys. Do not wrap in markdown or backticks. If a
   <div class="header">
     <div class="institution-name">${const HtmlEscape().convert(appName)}</div>
     <div class="address">$address</div>
-    <div class="subject-pill">${const HtmlEscape().convert(subject)}</div>
+    <div class="exam-title-badge">${const HtmlEscape().convert(examTitle)}</div>
+    <div class="subject-pill">${const HtmlEscape().convert(subjectLabel)}: ${const HtmlEscape().convert(subject)}</div>
   </div>
   <div class="meta-row">
-    <div>শ্রেণি: ${const HtmlEscape().convert(className)}</div>
-    <div>পূর্ণমান: ${const HtmlEscape().convert(fullMark)}</div>
-    <div>সময়: ${const HtmlEscape().convert(time)}</div>
+    <div>$classLabel: ${const HtmlEscape().convert(className)}</div>
+    <div>$dateLabel: ${const HtmlEscape().convert(examDateStr)}</div>
+    <div>$timeLabel: ${const HtmlEscape().convert(timeFormatted)}</div>
+    <div>$markLabel: ${const HtmlEscape().convert(fullMarkFormatted)}</div>
   </div>
   <div style="height: 12px;"></div>
   $questionsHtml
@@ -1737,7 +1768,7 @@ Return ONLY valid raw JSON with keys. Do not wrap in markdown or backticks. If a
 ''';
 
     try {
-      await printOrExportHtml(fullHtml, _examTitle);
+      await printOrExportHtml(fullHtml, examTitle);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1748,75 +1779,107 @@ Return ONLY valid raw JSON with keys. Do not wrap in markdown or backticks. If a
   }
 
   Future<void> _openPrintHeaderDialog(List<QueryDocumentSnapshot> docs) async {
+    final titleCtrl = TextEditingController(text: _examTitle);
+    final dateCtrl = TextEditingController(text: _formatDate(_startDate ?? DateTime.now()));
+
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Exam Header Details', style: _bn),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: _appNameCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Institution Name',
-                  border: OutlineInputBorder(),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Exam Header Details', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: SizedBox(
+          width: 500,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: titleCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Exam Title / Name',
+                    border: OutlineInputBorder(),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _addressCtrl,
-                maxLines: 2,
-                style: _bn,
-                decoration: const InputDecoration(
-                  labelText: 'Address & Phone',
-                  border: OutlineInputBorder(),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _appNameCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Institution Name',
+                    border: OutlineInputBorder(),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _classCtrl,
-                style: _bn,
-                decoration: const InputDecoration(
-                  labelText: 'Class',
-                  border: OutlineInputBorder(),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _addressCtrl,
+                  maxLines: 2,
+                  style: _bn,
+                  decoration: const InputDecoration(
+                    labelText: 'Address & Contact Info',
+                    border: OutlineInputBorder(),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _subjectCtrl,
-                style: _bn,
-                decoration: const InputDecoration(
-                  labelText: 'Subject',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _fullMarkCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Full Mark',
-                        border: OutlineInputBorder(),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _classCtrl,
+                        style: _bn,
+                        decoration: const InputDecoration(
+                          labelText: 'Class',
+                          border: OutlineInputBorder(),
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: TextField(
-                      controller: _timeCtrl,
-                      style: _bn,
-                      decoration: const InputDecoration(
-                        labelText: 'Time',
-                        border: OutlineInputBorder(),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: _subjectCtrl,
+                        style: _bn,
+                        decoration: const InputDecoration(
+                          labelText: 'Subject',
+                          border: OutlineInputBorder(),
+                        ),
                       ),
                     ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _timeCtrl,
+                        style: _bn,
+                        decoration: const InputDecoration(
+                          labelText: 'Time (Minutes)',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: _fullMarkCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Full Marks',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: dateCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Exam Date',
+                    border: OutlineInputBorder(),
+                    suffixIcon: Icon(Icons.calendar_today_outlined, size: 20),
                   ),
-                ],
-              ),
-            ],
+                ),
+              ],
+            ),
           ),
         ),
         actions: [
@@ -1825,6 +1888,7 @@ Return ONLY valid raw JSON with keys. Do not wrap in markdown or backticks. If a
             child: const Text('Cancel'),
           ),
           FilledButton.icon(
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.royalBlue),
             onPressed: () => Navigator.pop(ctx, true),
             icon: const Icon(Icons.picture_as_pdf),
             label: const Text('Export / Print PDF'),
@@ -1834,8 +1898,15 @@ Return ONLY valid raw JSON with keys. Do not wrap in markdown or backticks. If a
     );
 
     if (ok == true && mounted) {
-      await _exportBengaliPdf(docs);
+      await _exportBengaliPdf(
+        docs,
+        customTitle: titleCtrl.text,
+        customDate: dateCtrl.text,
+      );
     }
+
+    titleCtrl.dispose();
+    dateCtrl.dispose();
   }
 
   Widget _buildQPButtonToggle() {

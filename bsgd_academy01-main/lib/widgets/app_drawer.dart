@@ -7,6 +7,7 @@ import '../screens/exams_screen.dart';
 import '../screens/home_screen.dart';
 import '../screens/live_class_screen.dart';
 import '../screens/notes_screen.dart';
+import '../screens/public_mcq_screen.dart';
 import '../screens/public_suggestion_screen.dart';
 import '../screens/results_screen.dart';
 import '../screens/student_dashboard_screen.dart';
@@ -28,9 +29,15 @@ class AppDrawer extends StatelessWidget {
     final auth = AuthService();
 
     if (role == UserRole.student) {
-      if (auth.isStudentLoggedIn) {
+      if (auth.isStudentLoggedIn || auth.isTeacherLoggedIn) {
         Navigator.push(context, MaterialPageRoute(builder: (_) => destination));
       } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please log in with your student account to continue.'),
+            backgroundColor: AppTheme.royalBlue,
+          ),
+        );
         Navigator.push(
           context,
           MaterialPageRoute(
@@ -154,7 +161,13 @@ class AppDrawer extends StatelessWidget {
                     context,
                     Icons.lightbulb_outline,
                     'Teacher Suggestions',
-                      PublicSuggestionScreen(),
+                    PublicSuggestionScreen(),
+                  ),
+                  _buildItem(
+                    context,
+                    Icons.quiz_outlined,
+                    'MCQ Exam',
+                    PublicMcqScreen(),
                   ),
                   const Divider(height: 24),
                   _buildSectionHeader('Student Portals'),
@@ -170,11 +183,17 @@ class AppDrawer extends StatelessWidget {
                       );
                     },
                   ),
-                  _buildItem(
+                  _buildProtectedItem(
                     context,
                     Icons.quiz_outlined,
                     'Model Test Exam Center',
-                    const ExamsScreen(),
+                    () {
+                      _openSecured(
+                        context,
+                        UserRole.student,
+                        PublicMcqScreen(),
+                      );
+                    },
                   ),
                   _buildItem(
                     context,

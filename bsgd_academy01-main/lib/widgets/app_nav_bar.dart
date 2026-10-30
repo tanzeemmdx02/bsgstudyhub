@@ -6,8 +6,8 @@ import '../screens/courses_screen.dart';
 import '../screens/home_screen.dart';
 import '../screens/live_class_screen.dart';
 import '../screens/notes_screen.dart';
-import '../screens/public_suggestion_screen.dart';
 import '../screens/public_mcq_screen.dart';
+import '../screens/public_suggestion_screen.dart';
 import '../screens/student_dashboard_screen.dart';
 import '../screens/student_login_screen.dart';
 import '../screens/teacher_dashboard_screen.dart';
@@ -41,14 +41,15 @@ class AppNavBar extends StatelessWidget implements PreferredSizeWidget {
     }
   }
 
-void _navigateToTeacher(BuildContext context) {
+  void _navigateToTeacher(BuildContext context) {
     final auth = AuthService();
     if (auth.isTeacherLoggedIn) {
-      _go(context, TeacherDashboardScreen()); // Fixed the dot typo here
+      _go(context, TeacherDashboardScreen());
     } else {
       _go(context, const TeacherLoginScreen());
     }
   }
+
   @override
   Widget build(BuildContext context) {
     final width = MediaQuery.sizeOf(context).width;
@@ -102,7 +103,7 @@ void _navigateToTeacher(BuildContext context) {
           _link(context, 'Suggestions', PublicSuggestionScreen()),
           _link(context, 'Live Class', const LiveClassScreen()),
           _link(context, 'Contact', const ContactScreen()),
-          _link(context, 'MCQ Exam', const PublicMcqScreen()),
+          _link(context, 'MCQ Exam', PublicMcqScreen()),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
             child: ElevatedButton(
@@ -145,6 +146,9 @@ void _navigateToTeacher(BuildContext context) {
                 case 'contact':
                   _go(context, const ContactScreen());
                   break;
+                case 'exam':
+                  _go(context, PublicMcqScreen());
+                  break;
                 case 'admission':
                   _go(context, const AdmissionScreen());
                   break;
@@ -157,6 +161,16 @@ void _navigateToTeacher(BuildContext context) {
               PopupMenuItem(value: 'suggestions', child: Text('Suggestions')),
               PopupMenuItem(value: 'live', child: Text('Live Class')),
               PopupMenuItem(value: 'contact', child: Text('Contact')),
+              PopupMenuItem(
+                value: 'exam',
+                child: Row(
+                  children: [
+                    Icon(Icons.quiz_outlined, size: 18, color: AppTheme.royalBlue),
+                    SizedBox(width: 8),
+                    Text('MCQ Exam', style: TextStyle(fontWeight: FontWeight.w600)),
+                  ],
+                ),
+              ),
               PopupMenuItem(value: 'admission', child: Text('Admission')),
             ],
           ),

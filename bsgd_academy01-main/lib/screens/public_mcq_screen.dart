@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../main.dart';
 import '../screens/student_login_screen.dart';
+import '../services/auth_service.dart';
 import '../services/bkash_payment_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/file_download.dart';
@@ -31,11 +32,15 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
     _loadAutoEnrollPreference();
   }
 
+  User? get _currentUser =>
+      FirebaseAuth.instance.currentUser ?? AuthService().firebaseUser;
+
   Future<void> _loadAutoEnrollPreference() async {
-    final user = FirebaseAuth.instance.currentUser;
+    final user = _currentUser;
     if (user == null) return;
 
-    final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+    final doc =
+        await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
     if (doc.exists && doc.data() != null) {
       final data = doc.data()!;
       if (data.containsKey('autoEnrollFree')) {
@@ -47,7 +52,7 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
   }
 
   Future<void> _toggleAutoEnroll(bool value) async {
-    final user = FirebaseAuth.instance.currentUser;
+    final user = _currentUser;
     if (user == null) return;
 
     setState(() => _autoEnrollFree = value);
@@ -77,10 +82,11 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
     return 4;
   }
 
-  void _showLoginPrompt(String title) {
+  void _showLoginPrompt(String title, {bool forTakeExam = false}) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Row(
           children: [
             Icon(Icons.lock_outline, color: Colors.deepOrange),
@@ -88,7 +94,11 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
             Text('Login Required'),
           ],
         ),
-        content: Text('You must be logged in to take or save "$title".'),
+        content: Text(
+          forTakeExam
+              ? 'You must be logged in to take "$title".'
+              : 'You must be logged in to save "$title" to your dashboard.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
@@ -103,7 +113,11 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
               Navigator.pop(ctx);
               Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const StudentLoginScreen()),
+                MaterialPageRoute(
+                  builder: (_) => StudentLoginScreen(
+                    targetScreen: PublicMcqScreen(),
+                  ),
+                ),
               );
             },
             child: const Text('Log In'),
@@ -113,15 +127,13 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
     );
   }
 
-  /// Adds exam to student's dashboard (exams_screen sync target)
   Future<void> _addToDashboard(String examId, String examTitle) async {
-    final user = FirebaseAuth.instance.currentUser;
+    final user = _currentUser;
     if (user == null) {
-      _showLoginPrompt(examTitle);
+      _showLoginPrompt(examTitle, forTakeExam: false);
       return;
     }
 
-    // Saving to user's saved_exams / saved items or marking as enrolled
     await FirebaseFirestore.instance
         .collection('users')
         .doc(user.uid)
@@ -143,20 +155,19 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
     }
   }
 
-  /// Handles payment verification if paid, then starts the exam directly
-  Future<void> _takeExamNow(BuildContext context, String docId, Map<String, dynamic> d) async {
-    final user = FirebaseAuth.instance.currentUser;
-    final isFree = d['isFree'] ?? true;
-    final price = d['price'] ?? 0;
+  Future<void> _takeExamNow(
+      BuildContext context, String docId, Map<String, dynamic> d) async {
+    final user = _currentUser;
+    final isFree = d['isFree'] ?? (d['pricing'] == 'free' || d['price'] == null || d['price'] == 0);
+    final price = d['price'] ?? d['examPrice'] ?? 0;
     final title = d['title']?.toString() ?? 'MCQ Exam';
-    final duration = d['durationMinutes'] ?? 30;
+    final duration = d['durationMinutes'] ?? d['time'] ?? 30;
 
     if (user == null) {
-      _showLoginPrompt(title);
+      _showLoginPrompt(title, forTakeExam: true);
       return;
     }
 
-    // If paid item, check payment unlock status first
     if (!isFree && price > 0) {
       final unlocked = await BkashPaymentService.hasPurchasedItem(docId);
       if (!unlocked) {
@@ -174,7 +185,6 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
 
     if (!context.mounted) return;
 
-    // Navigate directly to the exam-taking screen
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -187,14 +197,14 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
     );
   }
 
-  /// Interactive Modal offering choice: Take Now or Add to Dash
-  void _showExamOptionsDialog(BuildContext context, String docId, Map<String, dynamic> d, bool isSaved) {
+  void _showExamOptionsDialog(
+      BuildContext context, String docId, Map<String, dynamic> d, bool isSaved) {
     final title = d['title']?.toString() ?? 'MCQ Exam';
     final questionCount = d['questionCount'] ?? 0;
     final marks = d['fullMarks'] ?? '20';
-    final time = d['durationMinutes'] ?? 30;
-    final isFree = d['isFree'] ?? true;
-    final price = d['price'] ?? 0;
+    final time = d['durationMinutes'] ?? d['time'] ?? 30;
+    final isFree = d['isFree'] ?? (d['pricing'] == 'free' || d['price'] == null || d['price'] == 0);
+    final price = d['price'] ?? d['examPrice'] ?? 0;
 
     showDialog(
       context: context,
@@ -215,7 +225,8 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
-                      color: (isFree ? Colors.green : Colors.deepOrange).withOpacity(0.12),
+                      color: (isFree ? Colors.green : Colors.deepOrange)
+                          .withOpacity(0.12),
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: Text(
@@ -223,14 +234,19 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.bold,
-                        color: isFree ? Colors.green.shade800 : Colors.deepOrange.shade800,
+                        color: isFree
+                            ? Colors.green.shade800
+                            : Colors.deepOrange.shade800,
                       ),
                     ),
                   ),
                   const SizedBox(width: 8),
                   Text(
                     '$questionCount Q • $marks marks • $time min',
-                    style: const TextStyle(fontSize: 12, color: AppTheme.textMuted, fontWeight: FontWeight.w600),
+                    style: const TextStyle(
+                        fontSize: 12,
+                        color: AppTheme.textMuted,
+                        fontWeight: FontWeight.w600),
                   ),
                 ],
               ),
@@ -273,7 +289,8 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
     );
   }
 
-  bool _matchesStudentProfile(Map<String, dynamic> examData, Map<String, dynamic>? studentData) {
+  bool _matchesStudentProfile(
+      Map<String, dynamic> examData, Map<String, dynamic>? studentData) {
     if (studentData == null) return false;
 
     final examClass = examData['class']?.toString().trim();
@@ -286,16 +303,28 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
     final studentSubDept = studentData['subDepartment']?.toString().trim();
     final studentSubject = studentData['subject']?.toString().trim();
 
-    if (examClass != null && examClass.isNotEmpty && examClass != 'General' && examClass != studentClass) {
+    if (examClass != null &&
+        examClass.isNotEmpty &&
+        examClass != 'General' &&
+        examClass != studentClass) {
       return false;
     }
-    if (examGroup != null && examGroup.isNotEmpty && examGroup != 'General' && examGroup != studentGroup) {
+    if (examGroup != null &&
+        examGroup.isNotEmpty &&
+        examGroup != 'General' &&
+        examGroup != studentGroup) {
       return false;
     }
-    if (examSubDept != null && examSubDept.isNotEmpty && examSubDept != 'General' && examSubDept != studentSubDept) {
+    if (examSubDept != null &&
+        examSubDept.isNotEmpty &&
+        examSubDept != 'General' &&
+        examSubDept != studentSubDept) {
       return false;
     }
-    if (examSubject != null && examSubject.isNotEmpty && examSubject != 'General' && examSubject != studentSubject) {
+    if (examSubject != null &&
+        examSubject.isNotEmpty &&
+        examSubject != 'General' &&
+        examSubject != studentSubject) {
       return false;
     }
 
@@ -305,7 +334,7 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
   @override
   Widget build(BuildContext context) {
     final appState = AppStateScope.of(context);
-    final user = FirebaseAuth.instance.currentUser;
+    final user = _currentUser;
 
     return Scaffold(
       drawer: const AppDrawer(),
@@ -315,7 +344,10 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
       ),
       body: StreamBuilder<DocumentSnapshot>(
         stream: user != null
-            ? FirebaseFirestore.instance.collection('users').doc(user.uid).snapshots()
+            ? FirebaseFirestore.instance
+                .collection('users')
+                .doc(user.uid)
+                .snapshots()
             : const Stream.empty(),
         builder: (context, userSnap) {
           final studentData = userSnap.data?.data() as Map<String, dynamic>?;
@@ -338,12 +370,14 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
                               children: [
                                 Text(
                                   'Public MCQ Exams',
-                                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+                                  style: TextStyle(
+                                      fontSize: 24, fontWeight: FontWeight.w800),
                                 ),
                                 SizedBox(height: 6),
                                 Text(
                                   'Take exams right away or add them to your dashboard for later practice.',
-                                  style: TextStyle(color: AppTheme.textMuted, fontSize: 13),
+                                  style: TextStyle(
+                                      color: AppTheme.textMuted, fontSize: 13),
                                 ),
                               ],
                             ),
@@ -353,7 +387,8 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
                               children: [
                                 const Text(
                                   'Auto Add Free',
-                                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                                  style: TextStyle(
+                                      fontSize: 12, fontWeight: FontWeight.w600),
                                 ),
                                 const SizedBox(width: 6),
                                 Switch(
@@ -368,7 +403,6 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
                       ),
                       const SizedBox(height: 20),
 
-                      // Published Exams Feed Grid
                       StreamBuilder<QuerySnapshot>(
                         stream: FirebaseFirestore.instance
                             .collection('exams')
@@ -382,7 +416,8 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
                             );
                           }
 
-                          final docs = List<DocumentSnapshot>.from(snap.data?.docs ?? []);
+                          final docs =
+                              List<DocumentSnapshot>.from(snap.data?.docs ?? []);
 
                           docs.sort((a, b) {
                             final aData = a.data() as Map<String, dynamic>?;
@@ -419,7 +454,8 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
                                 shrinkWrap: true,
                                 physics: const NeverScrollableScrollPhysics(),
                                 itemCount: docs.length,
-                                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                                gridDelegate:
+                                    SliverGridDelegateWithFixedCrossAxisCount(
                                   crossAxisCount: cols,
                                   crossAxisSpacing: 12,
                                   mainAxisSpacing: 12,
@@ -428,13 +464,17 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
                                 itemBuilder: (ctx, i) {
                                   final docId = docs[i].id;
                                   final d = docs[i].data() as Map<String, dynamic>;
-                                  final isFree = d['isFree'] ?? true;
-                                  final price = d['price'] ?? 0;
+                                  final isFree = d['isFree'] ??
+                                      (d['pricing'] == 'free' ||
+                                          d['price'] == null ||
+                                          d['price'] == 0);
+                                  final price = d['price'] ?? d['examPrice'] ?? 0;
                                   final targetClass = d['class'];
                                   final title = d['title'] ?? 'Untitled Exam';
                                   final questionCount = d['questionCount'] ?? 0;
 
-                                  final matchesProfile = _matchesStudentProfile(d, studentData);
+                                  final matchesProfile =
+                                      _matchesStudentProfile(d, studentData);
                                   final isSaved = savedIds.contains(docId) ||
                                       (_autoEnrollFree && isFree && matchesProfile);
 
@@ -442,11 +482,13 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
                                     clipBehavior: Clip.antiAlias,
                                     elevation: 1,
                                     child: InkWell(
-                                      onTap: () => _showExamOptionsDialog(context, docId, d, isSaved),
+                                      onTap: () => _showExamOptionsDialog(
+                                          context, docId, d, isSaved),
                                       child: Padding(
                                         padding: const EdgeInsets.all(14),
                                         child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
                                           children: [
                                             Row(
                                               mainAxisAlignment:
@@ -458,7 +500,8 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
                                                   color: Colors.orange,
                                                 ),
                                                 Container(
-                                                  padding: const EdgeInsets.symmetric(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
                                                     horizontal: 6,
                                                     vertical: 2,
                                                   ),
@@ -477,7 +520,8 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
                                                       fontWeight: FontWeight.bold,
                                                       color: isFree
                                                           ? Colors.green.shade800
-                                                          : Colors.deepOrange.shade800,
+                                                          : Colors.deepOrange
+                                                              .shade800,
                                                     ),
                                                   ),
                                                 ),
@@ -509,7 +553,9 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
                                             const SizedBox(height: 8),
                                             Row(
                                               children: [
-                                                const Icon(Icons.help_outline, size: 14, color: AppTheme.textMuted),
+                                                const Icon(Icons.help_outline,
+                                                    size: 14,
+                                                    color: AppTheme.textMuted),
                                                 const SizedBox(width: 4),
                                                 Text(
                                                   '$questionCount Questions',
@@ -527,18 +573,27 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
                                                 Expanded(
                                                   child: OutlinedButton(
                                                     style: OutlinedButton.styleFrom(
-                                                      padding: const EdgeInsets.symmetric(vertical: 6),
-                                                      side: BorderSide(color: isSaved ? Colors.grey.shade400 : AppTheme.royalBlue),
+                                                      padding:
+                                                          const EdgeInsets.symmetric(
+                                                              vertical: 6),
+                                                      side: BorderSide(
+                                                        color: isSaved
+                                                            ? Colors.grey.shade400
+                                                            : AppTheme.royalBlue,
+                                                      ),
                                                     ),
                                                     onPressed: isSaved
                                                         ? null
-                                                        : () => _addToDashboard(docId, title),
+                                                        : () => _addToDashboard(
+                                                            docId, title),
                                                     child: Text(
                                                       isSaved ? 'Saved' : 'Add to Dash',
                                                       style: TextStyle(
                                                         fontSize: 10.5,
                                                         fontWeight: FontWeight.bold,
-                                                        color: isSaved ? Colors.grey : AppTheme.royalBlue,
+                                                        color: isSaved
+                                                            ? Colors.grey
+                                                            : AppTheme.royalBlue,
                                                       ),
                                                     ),
                                                   ),
@@ -547,15 +602,22 @@ class _PublicMcqScreenState extends State<PublicMcqScreen> {
                                                 Expanded(
                                                   child: ElevatedButton(
                                                     style: ElevatedButton.styleFrom(
-                                                      backgroundColor: AppTheme.royalBlue,
+                                                      backgroundColor:
+                                                          AppTheme.royalBlue,
                                                       foregroundColor: Colors.white,
                                                       elevation: 1,
-                                                      padding: const EdgeInsets.symmetric(vertical: 6),
+                                                      padding:
+                                                          const EdgeInsets.symmetric(
+                                                              vertical: 6),
                                                     ),
-                                                    onPressed: () => _takeExamNow(context, docId, d),
+                                                    onPressed: () => _takeExamNow(
+                                                        context, docId, d),
                                                     child: const Text(
                                                       'Take Exam',
-                                                      style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold),
+                                                      style: TextStyle(
+                                                          fontSize: 10.5,
+                                                          fontWeight:
+                                                              FontWeight.bold),
                                                     ),
                                                   ),
                                                 ),
