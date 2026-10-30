@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "939617822631",
+    "project_id": "bsgd-academy",
+    "storage_bucket": "bsgd-academy.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:939617822631:android:512f8a1c50be9cf0db7882",
+        "android_client_info": {
+          "package_name": "bsgd.online.academy"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA3X71f9VoMFxQkR1juXbeEeE29rpldPd8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:939617822631:android:c28bcae5be6d4a07db7882",
+        "android_client_info": {
+          "package_name": "com.example.bsgd_online_academy"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA3X71f9VoMFxQkR1juXbeEeE29rpldPd8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
