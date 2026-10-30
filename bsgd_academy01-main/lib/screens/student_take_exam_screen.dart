@@ -6,8 +6,19 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
-import '../theme/app_theme.dart';
 import '../services/ai_mcq_service.dart';
+import '../theme/app_theme.dart';
+
+const _bn = TextStyle(
+  fontFamily: 'Noto Sans Bengali',
+  fontFamilyFallback: [
+    'Hind Siliguri',
+    'Kalpurush',
+    'SolaimanLipi',
+    'Arial',
+  ],
+  height: 1.5,
+);
 
 class StudentTakeExamScreen extends StatefulWidget {
   final String examId;
@@ -80,7 +91,9 @@ class _StudentTakeExamScreenState extends State<StudentTakeExamScreen> {
   String get _timeLabel {
     final m = _secondsLeft ~/ 60;
     final s = _secondsLeft % 60;
-    return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+    final formattedMin = toBanglaDigits(m.toString().padLeft(2, '0'));
+    final formattedSec = toBanglaDigits(s.toString().padLeft(2, '0'));
+    return '$formattedMin:$formattedSec';
   }
 
   void _onSelect(int qIndex, int optionIndex, int correctIndex) {
@@ -103,6 +116,9 @@ class _StudentTakeExamScreenState extends State<StudentTakeExamScreen> {
 
     for (var i = 0; i < _questions.length; i++) {
       final d = _questions[i].data() as Map<String, dynamic>;
+      final isPassage = (d['type']?.toString() ?? 'question') == 'passage';
+      if (isPassage) continue;
+
       final opts = List<String>.from(d['options'] ?? []);
       final correct = d['correctIndex'] as int? ?? 0;
       final chosen = _answers[i];
@@ -111,7 +127,7 @@ class _StudentTakeExamScreenState extends State<StudentTakeExamScreen> {
 
       items.add(
         _ResultItem(
-          index: i + 1,
+          index: items.length + 1,
           text: d['text']?.toString() ?? '',
           options: opts,
           correctIndex: correct,
@@ -136,7 +152,7 @@ class _StudentTakeExamScreenState extends State<StudentTakeExamScreen> {
         'examTitle': widget.examTitle,
         'studentId': uid,
         'score': score,
-        'total': _questions.length,
+        'total': items.length,
         'createdAt': FieldValue.serverTimestamp(),
       });
     } catch (_) {}
@@ -149,7 +165,7 @@ class _StudentTakeExamScreenState extends State<StudentTakeExamScreen> {
     });
   }
 
-  /// AI writes tips as the teacher would
+  /// AI writes personalized teacher feedback in Bangla
   Future<String> _generateTeacherTips(
     List<_ResultItem> items,
     int score,
@@ -178,8 +194,7 @@ class _StudentTakeExamScreenState extends State<StudentTakeExamScreen> {
               })
               .join('\n\n');
 
-    final prompt =
-        '''
+    final prompt = '''
 You are a caring teacher at BSGD Academy (Bangladesh HSC/SSC coaching).
 A student just finished the MCQ exam "${widget.examTitle}".
 Score: $score out of ${items.length}.
@@ -199,41 +214,44 @@ $summary
 ''';
 
     try {
-      const models = [
-        'gemini-2.5-flash',
-        'gemini-flash-latest',
-        'gemini-2.5-flash-lite',
-        'gemini-3.5-flash',
-      ];
-      final apiKey = AiMcqService.apiKey;
+      final keys = AiMcqService.keyPool.isNotEmpty
+          ? AiMcqService.keyPool
+          : [AiMcqService.apiKey];
 
-      for (final model in models) {
-        final uri = Uri.parse(
-          'https://generativelanguage.googleapis.com/v1beta/models/'
-          '$model:generateContent?key=$apiKey',
-        );
-        final res = await http.post(
-          uri,
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'contents': [
-              {
-                'parts': [
-                  {'text': prompt},
+      const models = AiMcqService.freeModels;
+
+      for (final key in keys) {
+        if (key.trim().isEmpty) continue;
+        for (final model in models) {
+          try {
+            final uri = Uri.parse(
+              'https://generativelanguage.googleapis.com/v1beta/models/'
+              '$model:generateContent?key=$key',
+            );
+            final res = await http.post(
+              uri,
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({
+                'contents': [
+                  {
+                    'parts': [
+                      {'text': prompt},
+                    ],
+                  },
                 ],
-              },
-            ],
-            'generationConfig': {'temperature': 0.5},
-          }),
-        );
-        if (res.statusCode != 200) continue;
-        final data = jsonDecode(res.body) as Map<String, dynamic>;
-        final text =
-            data['candidates']?[0]?['content']?['parts']?[0]?['text']
-                ?.toString()
-                .trim() ??
-            '';
-        if (text.isNotEmpty) return text;
+                'generationConfig': {'temperature': 0.5},
+              }),
+            ).timeout(const Duration(seconds: 12));
+
+            if (res.statusCode != 200) continue;
+            final data = jsonDecode(res.body) as Map<String, dynamic>;
+            final text = data['candidates']?[0]?['content']?['parts']?[0]?['text']
+                    ?.toString()
+                    .trim() ??
+                '';
+            if (text.isNotEmpty) return text;
+          } catch (_) {}
+        }
       }
     } catch (_) {}
 
@@ -268,13 +286,15 @@ $summary
       return _ResultView(
         examTitle: widget.examTitle,
         score: _score,
-        total: _questions.length,
+        total: _results.length,
         results: _results,
         aiTips: _aiTips,
         tipsLoading: _tipsLoading,
         onDone: () => Navigator.pop(context),
       );
     }
+
+    var questionDisplayNum = 0;
 
     return Scaffold(
       appBar: AppBar(
@@ -301,6 +321,7 @@ $summary
                   _timeLabel,
                   style: TextStyle(
                     fontWeight: FontWeight.w800,
+                    fontFamily: 'Noto Sans Bengali',
                     color: _secondsLeft < 60
                         ? Colors.red
                         : Colors.orange.shade800,
@@ -316,13 +337,55 @@ $summary
         itemCount: _questions.length,
         itemBuilder: (context, i) {
           final d = _questions[i].data() as Map<String, dynamic>;
-          final opts = List<String>.from(d['options'] ?? []);
+          final isPassage = (d['type']?.toString() ?? 'question') == 'passage';
           final text = d['text']?.toString() ?? '';
+
+          if (isPassage) {
+            return Container(
+              margin: const EdgeInsets.only(bottom: 14),
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF9EC),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFD4A333), width: 1.2),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'উদ্দীপক / Passage',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 12,
+                      color: Color(0xFF8B6914),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    text,
+                    style: _bn.copyWith(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+
+          questionDisplayNum++;
+          final opts = List<String>.from(d['options'] ?? []);
           final correct = d['correctIndex'] as int? ?? 0;
           final explanation = d['explanation']?.toString() ?? '';
           final locked = _locked.contains(i);
           final selected = _answers[i];
           final showAnswer = _revealed.contains(i);
+
+          final isBangla = isBanglaText(text) || isBanglaText(widget.examTitle);
+          final qNumStr = isBangla ? toBanglaDigits(questionDisplayNum) : '$questionDisplayNum';
+          const bnLabels = ['ক', 'খ', 'গ', 'ঘ'];
+          const enLabels = ['A', 'B', 'C', 'D'];
+          final currentLabels = isBangla ? bnLabels : enLabels;
 
           return Card(
             margin: const EdgeInsets.only(bottom: 14),
@@ -334,13 +397,11 @@ $summary
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // No English "Q12:" — only number + text
                   Text(
-                    '${i + 1}. $text',
-                    style: const TextStyle(
+                    '$qNumStr. $text',
+                    style: _bn.copyWith(
                       fontWeight: FontWeight.w700,
                       fontSize: 15,
-                      height: 1.4,
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -360,6 +421,8 @@ $summary
                       borderC = AppTheme.royalBlue;
                     }
 
+                    final optLabel = oi < 4 ? currentLabels[oi] : String.fromCharCode(65 + oi);
+
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 6),
                       child: Material(
@@ -367,9 +430,7 @@ $summary
                         borderRadius: BorderRadius.circular(10),
                         child: InkWell(
                           borderRadius: BorderRadius.circular(10),
-                          onTap: locked
-                              ? null
-                              : () => _onSelect(i, oi, correct),
+                          onTap: locked ? null : () => _onSelect(i, oi, correct),
                           child: Container(
                             width: double.infinity,
                             padding: const EdgeInsets.symmetric(
@@ -394,7 +455,12 @@ $summary
                                       : Colors.grey,
                                 ),
                                 const SizedBox(width: 10),
-                                Expanded(child: Text(opts[oi])),
+                                Expanded(
+                                  child: Text(
+                                    '$optLabel. ${opts[oi]}',
+                                    style: _bn.copyWith(fontSize: 14),
+                                  ),
+                                ),
                               ],
                             ),
                           ),
@@ -416,9 +482,9 @@ $summary
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'সঠিক উত্তর: ${String.fromCharCode(65 + correct)}. '
+                            'সঠিক উত্তর: ${correct < 4 ? currentLabels[correct] : correct}. '
                             '${correct < opts.length ? opts[correct] : ''}',
-                            style: TextStyle(
+                            style: _bn.copyWith(
                               fontWeight: FontWeight.w800,
                               color: Colors.green.shade800,
                             ),
@@ -427,7 +493,7 @@ $summary
                             const SizedBox(height: 6),
                             Text(
                               explanation,
-                              style: const TextStyle(height: 1.4, fontSize: 13),
+                              style: _bn.copyWith(fontSize: 13),
                             ),
                           ],
                         ],
@@ -449,7 +515,10 @@ $summary
               minimumSize: const Size.fromHeight(48),
             ),
             onPressed: () async {
-              final unanswered = _questions.length - _answers.length;
+              final unanswered = _questions
+                      .where((d) => (d.data() as Map)['type'] != 'passage')
+                      .length -
+                  _answers.length;
               if (unanswered > 0) {
                 final ok = await showDialog<bool>(
                   context: context,
@@ -527,6 +596,9 @@ class _ResultView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final pct = total == 0 ? 0 : (score * 100 / total).round();
+    final bnScore = toBanglaDigits(score);
+    final bnTotal = toBanglaDigits(total);
+    final bnPct = toBanglaDigits(pct);
 
     return Scaffold(
       appBar: AppBar(title: const Text('ফলাফল')),
@@ -541,25 +613,27 @@ class _ResultView extends StatelessWidget {
                   Text(
                     examTitle,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style: _bn.copyWith(
                       fontWeight: FontWeight.w800,
                       fontSize: 16,
                     ),
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    '$score / $total',
+                    '$bnScore / $bnTotal',
                     style: const TextStyle(
                       fontSize: 36,
                       fontWeight: FontWeight.w900,
                       color: AppTheme.royalBlue,
+                      fontFamily: 'Noto Sans Bengali',
                     ),
                   ),
                   Text(
-                    '$pct%',
+                    '$bnPct%',
                     style: const TextStyle(
                       fontWeight: FontWeight.w700,
                       color: AppTheme.textMuted,
+                      fontFamily: 'Noto Sans Bengali',
                     ),
                   ),
                 ],
@@ -580,7 +654,10 @@ class _ResultView extends StatelessWidget {
                       SizedBox(width: 8),
                       Text(
                         'শিক্ষকের টিপস',
-                        style: TextStyle(fontWeight: FontWeight.w800),
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontFamily: 'Noto Sans Bengali',
+                        ),
                       ),
                     ],
                   ),
@@ -596,7 +673,7 @@ class _ResultView extends StatelessWidget {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           ),
                           SizedBox(width: 12),
-                          Text('শিক্ষক টিপস তৈরি করছেন…'),
+                          Text('শিক্ষক টিপস তৈরি করছেন…', style: _bn),
                         ],
                       ),
                     )
@@ -605,7 +682,7 @@ class _ResultView extends StatelessWidget {
                       aiTips.isEmpty
                           ? 'টিপস পাওয়া যায়নি। ভুলগুলো নিজে রিভিউ করুন।'
                           : aiTips,
-                      style: const TextStyle(height: 1.45, fontSize: 14),
+                      style: _bn.copyWith(fontSize: 14),
                     ),
                 ],
               ),
@@ -614,10 +691,20 @@ class _ResultView extends StatelessWidget {
           const SizedBox(height: 16),
           const Text(
             'পর্যালোচনা',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+              fontFamily: 'Noto Sans Bengali',
+            ),
           ),
           const SizedBox(height: 8),
           ...results.map((r) {
+            final isBangla = isBanglaText(r.text);
+            const bnLabels = ['ক', 'খ', 'গ', 'ঘ'];
+            const enLabels = ['A', 'B', 'C', 'D'];
+            final labels = isBangla ? bnLabels : enLabels;
+            final idxStr = isBangla ? toBanglaDigits(r.index) : '${r.index}';
+
             return Card(
               margin: const EdgeInsets.only(bottom: 10),
               child: ExpansionTile(
@@ -626,12 +713,12 @@ class _ResultView extends StatelessWidget {
                   color: r.isCorrect ? Colors.green : Colors.red,
                 ),
                 title: Text(
-                  '${r.index}. ${r.text}',
+                  '$idxStr. ${r.text}',
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: _bn.copyWith(
                     fontWeight: FontWeight.w700,
-                    fontSize: 13,
+                    fontSize: 13.5,
                   ),
                 ),
                 subtitle: Text(
@@ -639,6 +726,7 @@ class _ResultView extends StatelessWidget {
                   style: TextStyle(
                     color: r.isCorrect ? Colors.green : Colors.red,
                     fontWeight: FontWeight.w600,
+                    fontFamily: 'Noto Sans Bengali',
                   ),
                 ),
                 children: [
@@ -650,6 +738,8 @@ class _ResultView extends StatelessWidget {
                         ...List.generate(r.options.length, (oi) {
                           final isRight = oi == r.correctIndex;
                           final isPick = oi == r.selectedIndex;
+                          final lbl = oi < 4 ? labels[oi] : String.fromCharCode(65 + oi);
+
                           return Container(
                             width: double.infinity,
                             margin: const EdgeInsets.only(bottom: 6),
@@ -658,31 +748,32 @@ class _ResultView extends StatelessWidget {
                               color: isRight
                                   ? Colors.green.withOpacity(0.12)
                                   : isPick
-                                  ? Colors.red.withOpacity(0.1)
-                                  : null,
+                                      ? Colors.red.withOpacity(0.1)
+                                      : null,
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(
                                 color: isRight
                                     ? Colors.green
                                     : isPick
-                                    ? Colors.red
-                                    : Colors.grey.shade300,
+                                        ? Colors.red
+                                        : Colors.grey.shade300,
                               ),
                             ),
                             child: Text(
-                              '${String.fromCharCode(65 + oi)}. ${r.options[oi]}'
+                              '$lbl. ${r.options[oi]}'
                               '${isRight ? '  ✓' : ''}'
                               '${isPick && !isRight ? '  (আপনার উত্তর)' : ''}',
+                              style: _bn,
                             ),
                           );
                         }),
                         if (r.explanation.isNotEmpty) ...[
                           const SizedBox(height: 8),
                           Text(
-                            'টিপস: ${r.explanation}',
-                            style: const TextStyle(
+                            'টিপস/ব্যাখ্যা: ${r.explanation}',
+                            style: _bn.copyWith(
                               fontStyle: FontStyle.italic,
-                              height: 1.4,
+                              fontSize: 13,
                             ),
                           ),
                         ],
@@ -700,7 +791,7 @@ class _ResultView extends StatelessWidget {
               minimumSize: const Size.fromHeight(48),
             ),
             onPressed: onDone,
-            child: const Text('ফিরে যান'),
+            child: const Text('ফিরে যান', style: _bn),
           ),
         ],
       ),
