@@ -48,6 +48,7 @@ dependencies:
   google_fonts: ^9.0.0
   bangla_pdf: ^1.9.2
   flutter_bkash: ^1.0.1
+  video_player: ^2.14.1
 
 dev_dependencies:
   flutter_test:

@@ -3,11 +3,13 @@ import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:video_player/video_player.dart';
 import 'package:youtube_player_iframe/youtube_player_iframe.dart';
 
-import '../theme/app_theme.dart';
 import '../services/auth_service.dart';
+import '../theme/app_theme.dart';
 import '../utils/file_download.dart';
 import 'courses_screen.dart';
 
@@ -30,9 +32,28 @@ class VideoWatchScreen extends StatefulWidget {
 }
 
 class _VideoWatchScreenState extends State<VideoWatchScreen> {
-  YoutubePlayerController? _controller;
+  // YouTube Controller
+  YoutubePlayerController? _ytController;
+
+  // Native MP4 Controller (for Android APK / iOS)
+  VideoPlayerController? _videoPlayerController;
+  bool _isVideoInitialized = false;
+  bool _isVideoError = false;
+
   final _commentCtrl = TextEditingController();
   bool _sending = false;
+
+  bool get _isDirectVideo {
+    final lower = widget.youtubeUrl.toLowerCase().trim();
+    if (_extractId(lower) != null) return false;
+    return lower.contains('github.com') ||
+        lower.contains('objects.githubusercontent.com') ||
+        lower.endsWith('.mp4') ||
+        lower.endsWith('.webm') ||
+        lower.endsWith('.mov') ||
+        lower.endsWith('.mkv') ||
+        lower.contains('.mp4?');
+  }
 
   String? _extractId(String url) {
     final uri = Uri.tryParse(url.trim());
@@ -51,19 +72,52 @@ class _VideoWatchScreenState extends State<VideoWatchScreen> {
   @override
   void initState() {
     super.initState();
-    final id = _extractId(widget.youtubeUrl);
-    if (id != null) {
-      _controller = YoutubePlayerController.fromVideoId(
-        videoId: id,
-        autoPlay: true,
-        params: const YoutubePlayerParams(showFullscreenButton: true),
-      );
+    _initAppropriatePlayer();
+  }
+
+  void _initAppropriatePlayer() {
+    final url = widget.youtubeUrl.trim();
+
+    if (_isDirectVideo) {
+      // On mobile APK, use native VideoPlayerController
+      if (!kIsWeb && url.isNotEmpty) {
+        _videoPlayerController = VideoPlayerController.networkUrl(Uri.parse(url))
+          ..initialize().then((_) {
+            if (mounted) {
+              setState(() {
+                _isVideoInitialized = true;
+              });
+              _videoPlayerController?.play();
+            }
+          }).catchError((error) {
+            debugPrint('VideoPlayer error: $error');
+            if (mounted) {
+              setState(() {
+                _isVideoError = true;
+              });
+            }
+          });
+      }
+    } else {
+      // YouTube Player
+      final id = _extractId(url);
+      if (id != null) {
+        _ytController = YoutubePlayerController.fromVideoId(
+          videoId: id,
+          autoPlay: true,
+          params: const YoutubePlayerParams(
+            showFullscreenButton: true,
+            strictRelatedVideos: true, // rel=0: No external recommendations
+          ),
+        );
+      }
     }
   }
 
   @override
   void dispose() {
-    _controller?.close();
+    _ytController?.close();
+    _videoPlayerController?.dispose();
     _commentCtrl.dispose();
     super.dispose();
   }
@@ -82,10 +136,7 @@ class _VideoWatchScreenState extends State<VideoWatchScreen> {
     final user = FirebaseAuth.instance.currentUser;
     final name = AuthService().currentUserName.isNotEmpty
         ? AuthService().currentUserName
-        : (user?.email ?? 'Guest');
-
-    // Optional: require login
-    // if (user == null) { show login snackbar; return; }
+        : (user?.email ?? 'Student');
 
     setState(() => _sending = true);
     try {
@@ -97,15 +148,15 @@ class _VideoWatchScreenState extends State<VideoWatchScreen> {
           'replyCount': 0,
           'createdAt': FieldValue.serverTimestamp(),
         });
-        // optional video-level counter
+
         await FirebaseFirestore.instance
             .collection('courses')
             .doc(widget.courseId)
             .collection('videos')
             .doc(widget.videoId)
             .set({
-              'commentCount': FieldValue.increment(1),
-            }, SetOptions(merge: true));
+          'commentCount': FieldValue.increment(1),
+        }, SetOptions(merge: true));
       }
       _commentCtrl.clear();
     } catch (e) {
@@ -123,7 +174,7 @@ class _VideoWatchScreenState extends State<VideoWatchScreen> {
     final user = FirebaseAuth.instance.currentUser;
     final name = AuthService().currentUserName.isNotEmpty
         ? AuthService().currentUserName
-        : (user?.email ?? 'Guest');
+        : (user?.email ?? 'Student');
 
     await _commentsRef.doc(parentId).collection('replies').add({
       'text': text.trim(),
@@ -136,32 +187,282 @@ class _VideoWatchScreenState extends State<VideoWatchScreen> {
     });
   }
 
-  @override
+  /// Student anti-theft watermark (stamps their Name & Roll on the video)
+  Widget _buildStudentWatermark() {
+    final auth = AuthService();
+    final name = auth.currentUserName;
+    final roll = auth.currentUserRoll;
+    if (name.isEmpty && roll.isEmpty) return const SizedBox.shrink();
+
+    final label = roll.isNotEmpty ? '$name ($roll)' : name;
+
+    return IgnorePointer(
+      child: Container(
+        alignment: Alignment.topRight,
+        padding: const EdgeInsets.all(12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(0.35),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white54,
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Direct Video Player engine (HTML5 on Web with anti-download, Native VideoPlayer on APK)
+  Widget _buildDirectVideoPlayer() {
+    if (kIsWeb) {
+      return AspectRatio(
+        aspectRatio: 16 / 9,
+        child: Stack(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                color: Colors.black,
+                child: HtmlElementView.fromTagName(
+                  key: ValueKey(widget.youtubeUrl),
+                  tagName: 'video',
+                  onElementCreated: (element) {
+                    final el = element as dynamic;
+                    el.src = widget.youtubeUrl;
+                    el.controls = true;
+                    el.autoplay = false;
+                    el.playsInline = true;
+                    // Anti-Theft: disable download button & right click save
+                    el.setAttribute('controlsList', 'nodownload');
+                    el.setAttribute('disablePictureInPicture', 'true');
+                    el.oncontextmenu = (e) => false;
+
+                    el.style.width = '100%';
+                    el.style.height = '100%';
+                    el.style.objectFit = 'contain';
+                    el.style.backgroundColor = '#000000';
+                    el.load();
+                  },
+                ),
+              ),
+            ),
+            _buildStudentWatermark(),
+          ],
+        ),
+      );
+    }
+
+    // Android APK / iOS Engine
+    if (_isVideoError) {
+      return AspectRatio(
+        aspectRatio: 16 / 9,
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.black87,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          alignment: Alignment.center,
+          padding: const EdgeInsets.all(16),
+          child: const Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.error_outline, color: Colors.orange, size: 36),
+              SizedBox(height: 8),
+              Text(
+                'Video failed to play on device',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (!_isVideoInitialized || _videoPlayerController == null) {
+      return AspectRatio(
+        aspectRatio: 16 / 9,
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.black,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: const Center(
+            child: CircularProgressIndicator(color: Colors.white),
+          ),
+        ),
+      );
+    }
+
+    return AspectRatio(
+      aspectRatio: _videoPlayerController!.value.aspectRatio,
+      child: Stack(
+        alignment: Alignment.bottomCenter,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: VideoPlayer(_videoPlayerController!),
+          ),
+          _buildStudentWatermark(),
+          // Mobile In-App Controls
+          _buildMobileControls(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMobileControls() {
+    final controller = _videoPlayerController;
+    if (controller == null) return const SizedBox.shrink();
+
+    final isPlaying = controller.value.isPlaying;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Colors.transparent, Colors.black87],
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+        ),
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            icon: Icon(
+              isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
+              color: Colors.white,
+              size: 28,
+            ),
+            onPressed: () {
+              setState(() {
+                isPlaying ? controller.pause() : controller.play();
+              });
+            },
+          ),
+          Expanded(
+            child: VideoProgressIndicator(
+              controller,
+              allowScrubbing: true,
+              colors: const VideoProgressColors(
+                playedColor: AppTheme.royalBlue,
+                bufferedColor: Colors.white24,
+                backgroundColor: Colors.white12,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            _formatDuration(controller.value.position),
+            style: const TextStyle(color: Colors.white, fontSize: 11),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatDuration(Duration d) {
+    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= 1000;
+    final isDirect = _isDirectVideo;
+    final ytId = _extractId(widget.youtubeUrl);
 
-    final player = _controller == null
-        ? Container(
-            height: 220,
-            color: Colors.black12,
-            alignment: Alignment.center,
-            child: const Text('Invalid YouTube URL'),
-          )
-        : AspectRatio(
-            aspectRatio: 16 / 9,
-            child: YoutubePlayer(controller: _controller!),
-          );
+    Widget playerWidget;
+    if (isDirect) {
+      playerWidget = _buildDirectVideoPlayer();
+    } else if (ytId != null && _ytController != null) {
+      playerWidget = AspectRatio(
+        aspectRatio: 16 / 9,
+        child: Stack(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: YoutubePlayer(controller: _ytController!),
+            ),
+            _buildStudentWatermark(),
+          ],
+        ),
+      );
+    } else {
+      playerWidget = Container(
+        height: 220,
+        decoration: BoxDecoration(
+          color: Colors.black12,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        alignment: Alignment.center,
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.error_outline, color: Colors.orange, size: 36),
+            const SizedBox(height: 8),
+            const Text(
+              'Unable to load video',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              widget.youtubeUrl.isEmpty ? 'Empty URL' : widget.youtubeUrl,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.black54, fontSize: 12),
+            ),
+          ],
+        ),
+      );
+    }
 
     final mainColumn = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        player,
-        const SizedBox(height: 12),
+        playerWidget,
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: isDirect
+                    ? Colors.blue.withOpacity(0.12)
+                    : Colors.red.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: isDirect ? Colors.blue.shade300 : Colors.red.shade300,
+                ),
+              ),
+              child: Text(
+                isDirect ? 'IN-APP SECURE VIDEO' : 'UNLISTED VIDEO',
+                style: TextStyle(
+                  color: isDirect ? Colors.blue.shade900 : Colors.red.shade900,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
         Text(
           widget.title,
           style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
         ),
+        const SizedBox(height: 4),
         StreamBuilder<QuerySnapshot>(
           stream: _commentsRef.snapshots(),
           builder: (context, snap) {
@@ -173,12 +474,16 @@ class _VideoWatchScreenState extends State<VideoWatchScreen> {
           },
         ),
         const SizedBox(height: 16),
-        const Text('Related materials',
-            style: TextStyle(fontWeight: FontWeight.w800)),
+        const Text(
+          'Related materials',
+          style: TextStyle(fontWeight: FontWeight.w800),
+        ),
         _RelatedDocs(courseId: widget.courseId, videoId: widget.videoId),
         const SizedBox(height: 20),
-        const Text('Comments',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+        const Text(
+          'Comments',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+        ),
         const SizedBox(height: 8),
         Row(
           children: [
@@ -194,8 +499,7 @@ class _VideoWatchScreenState extends State<VideoWatchScreen> {
             ),
             const SizedBox(width: 8),
             FilledButton(
-              style: FilledButton.styleFrom(
-                  backgroundColor: AppTheme.royalBlue),
+              style: FilledButton.styleFrom(backgroundColor: AppTheme.royalBlue),
               onPressed: _sending ? null : () => _postComment(),
               child: const Text('Post'),
             ),
@@ -204,16 +508,20 @@ class _VideoWatchScreenState extends State<VideoWatchScreen> {
         const SizedBox(height: 12),
         _CommentsList(commentsRef: _commentsRef, onReply: _postReply),
         const SizedBox(height: 28),
-        const Text('More from this course',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+        const Text(
+          'More from this course',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+        ),
         const SizedBox(height: 8),
         _SameCourseVideos(
           courseId: widget.courseId,
           currentVideoId: widget.videoId,
         ),
         const SizedBox(height: 28),
-        const Text('Other courses',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+        const Text(
+          'Other courses',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+        ),
         const SizedBox(height: 8),
         _OtherCourses(currentCourseId: widget.courseId),
         const SizedBox(height: 40),
@@ -222,8 +530,7 @@ class _VideoWatchScreenState extends State<VideoWatchScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.title,
-            maxLines: 1, overflow: TextOverflow.ellipsis),
+        title: Text(widget.title, maxLines: 1, overflow: TextOverflow.ellipsis),
       ),
       body: wide
           ? Row(
@@ -243,15 +550,19 @@ class _VideoWatchScreenState extends State<VideoWatchScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Playlist',
-                            style: TextStyle(fontWeight: FontWeight.w800)),
+                        const Text(
+                          'Playlist',
+                          style: TextStyle(fontWeight: FontWeight.w800),
+                        ),
                         _SameCourseVideos(
                           courseId: widget.courseId,
                           currentVideoId: widget.videoId,
                         ),
                         const SizedBox(height: 20),
-                        const Text('Other courses',
-                            style: TextStyle(fontWeight: FontWeight.w800)),
+                        const Text(
+                          'Other courses',
+                          style: TextStyle(fontWeight: FontWeight.w800),
+                        ),
                         _OtherCourses(currentCourseId: widget.courseId),
                       ],
                     ),
@@ -265,7 +576,7 @@ class _VideoWatchScreenState extends State<VideoWatchScreen> {
             ),
     );
   }
-  }
+}
 
 class _CommentsList extends StatelessWidget {
   final CollectionReference commentsRef;
