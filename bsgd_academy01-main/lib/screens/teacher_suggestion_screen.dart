@@ -8,12 +8,371 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../services/ai_mcq_service.dart';
 import '../services/ai_suggestion_service.dart';
 import '../services/auth_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/file_download.dart';
 import '../utils/html_pdf_printer.dart';
 import 'teacher_ai_suggestions_screen.dart';
+
+class AiPoolStatusCard extends StatefulWidget {
+  const AiPoolStatusCard({super.key});
+
+  @override
+  State<AiPoolStatusCard> createState() => _AiPoolStatusCardState();
+}
+
+class _AiPoolStatusCardState extends State<AiPoolStatusCard> {
+  bool _isLoading = true;
+  final Set<int> _disabledIndices = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _initData();
+  }
+
+  Future<void> _initData() async {
+    await AiMcqService.syncFromFirestore();
+    if (mounted) {
+      _disabledIndices.clear();
+      // Keep all deactivated by default except the first one (index 0)
+      for (int i = 1; i < AiMcqService.keyPool.length; i++) {
+        _disabledIndices.add(i);
+      }
+      setState(() => _isLoading = false);
+    }
+  }
+
+  void _showAddKeyDialog() {
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.key_rounded, color: AppTheme.royalBlue),
+            SizedBox(width: 8),
+            Text('Add Gemini API Key', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: InputDecoration(
+            hintText: 'Paste your API key here...',
+            filled: true,
+            fillColor: Colors.grey.shade50,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: AppTheme.royalBlue,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () async {
+              final key = ctrl.text.trim();
+              if (key.isNotEmpty) {
+                await AiMcqService.addApiKey(key);
+                if (AiMcqService.keyPool.length > 1) {
+                  _disabledIndices.add(AiMcqService.keyPool.length - 1);
+                }
+                if (mounted) setState(() {});
+              }
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Add Key'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showEditKeyDialog(int index, String oldKey) {
+    final ctrl = TextEditingController(text: oldKey);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.edit_rounded, color: Colors.blue),
+            SizedBox(width: 8),
+            Text('Edit API Key', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: TextField(
+          controller: ctrl,
+          decoration: InputDecoration(
+            filled: true,
+            fillColor: Colors.grey.shade50,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.blue,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () async {
+              final key = ctrl.text.trim();
+              if (key.isNotEmpty) {
+                await AiMcqService.editApiKey(index, key);
+                if (mounted) setState(() {});
+              }
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Update'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _maskKey(String key) {
+    if (key.length <= 10) return key;
+    return '${key.substring(0, 6)}••••••••${key.substring(key.length - 4)}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final keys = AiMcqService.keyPool;
+
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Colors.white, Colors.indigo.shade50.withOpacity(0.4)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.indigo.shade100, width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.indigo.withOpacity(0.06),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppTheme.royalBlue.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.psychology_rounded, color: AppTheme.royalBlue, size: 24),
+                  ),
+                  const SizedBox(width: 12),
+                  const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'AI Engine & API Pool',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: 0.2),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        'Manage rotation keys & active Gemini model',
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppTheme.royalBlue,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  elevation: 2,
+                ),
+                onPressed: _showAddKeyDialog,
+                icon: const Icon(Icons.add_rounded, size: 18),
+                label: const Text('Add New API', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Divider(height: 1, color: Colors.black12),
+          ),
+          Row(
+            children: [
+              const Text('Active Gemini Model:', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey.shade300),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: AiMcqService.freeModels.contains(AiMcqService.selectedModel)
+                          ? AiMcqService.selectedModel
+                          : AiMcqService.freeModels.first,
+                      isExpanded: true,
+                      items: AiMcqService.freeModels.map((m) {
+                        return DropdownMenuItem(
+                          value: m,
+                          child: Text(m, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                        );
+                      }).toList(),
+                      onChanged: (val) async {
+                        if (val != null) {
+                          await AiMcqService.setModel(val);
+                          if (mounted) setState(() {});
+                        }
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          const Text(
+            'Configured Keys in Database Pool',
+            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: Colors.blueGrey),
+          ),
+          const SizedBox(height: 8),
+          _isLoading
+              ? const Center(child: Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator(strokeWidth: 2)))
+              : keys.isEmpty
+                  ? Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.shade50.withOpacity(0.5),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.amber.shade200),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.warning_amber_rounded, color: Colors.amber),
+                          SizedBox(width: 10),
+                          Text('No API keys in pool. Add an API key to enable AI features.', style: TextStyle(fontWeight: FontWeight.w500)),
+                        ],
+                      ),
+                    )
+                  : ListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: keys.length,
+                      itemBuilder: (ctx, idx) {
+                        final key = keys[idx];
+                        final displayNum = idx + 1;
+                        final isActive = !_disabledIndices.contains(idx);
+
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.grey.shade200),
+                            boxShadow: [
+                              BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 4, offset: const Offset(0, 2)),
+                            ],
+                          ),
+                          child: Row(
+                            children: [
+                              CircleAvatar(
+                                radius: 12,
+                                backgroundColor: AppTheme.royalBlue.withOpacity(0.1),
+                                child: Text('$displayNum', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.royalBlue)),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  _maskKey(key),
+                                  style: TextStyle(
+                                    fontFamily: 'monospace',
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: isActive ? Colors.black87 : Colors.grey,
+                                  ),
+                                ),
+                              ),
+                              InkWell(
+                                onTap: () {
+                                  setState(() {
+                                    if (_disabledIndices.contains(idx)) {
+                                      _disabledIndices.remove(idx);
+                                    } else {
+                                      _disabledIndices.add(idx);
+                                    }
+                                  });
+                                },
+                                borderRadius: BorderRadius.circular(6),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                  decoration: BoxDecoration(
+                                    color: isActive ? Colors.green.withOpacity(0.12) : Colors.red.withOpacity(0.12),
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(color: isActive ? Colors.green.shade300 : Colors.red.shade300),
+                                  ),
+                                  child: Text(
+                                    isActive ? 'Active' : 'Deactive',
+                                    style: TextStyle(
+                                      color: isActive ? Colors.green.shade800 : Colors.red.shade800,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              IconButton(
+                                icon: const Icon(Icons.edit_rounded, size: 18, color: Colors.blue),
+                                tooltip: 'Edit Key',
+                                onPressed: () => _showEditKeyDialog(idx, key),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.delete_outline_rounded, size: 18, color: Colors.red),
+                                tooltip: 'Delete Key',
+                                onPressed: () async {
+                                  await AiMcqService.removeApiKey(idx);
+                                  if (mounted) setState(() {});
+                                },
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+        ],
+      ),
+    );
+  }
+}
 
 class TeacherSuggestionScreen extends StatefulWidget {
   const TeacherSuggestionScreen({super.key});
@@ -137,15 +496,16 @@ class _TeacherSuggestionScreenState extends State<TeacherSuggestionScreen> {
 
   Future<void> _pickFileBase64() async {
     try {
-      final file = await FilePicker.pickFile(
+      final pickedFiles = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: const ['png', 'jpg', 'jpeg', 'webp', 'pdf'],
       );
-      if (file == null) return;
+      if (pickedFiles.isEmpty) return;
+      final file = pickedFiles.first;
 
       setState(() => _loadingFile = true);
       final name = file.name;
-      final bytes = await file.readAsBytes() as Uint8List;
+      final bytes = await file.readAsBytes();
       if (bytes.isEmpty) return;
 
       if (bytes.length > _maxBytes) {
@@ -203,15 +563,53 @@ class _TeacherSuggestionScreenState extends State<TeacherSuggestionScreen> {
     });
   }
 
+  void _autoMatchClassification(String hint) {
+    if (hint.isEmpty) return;
+    FirebaseFirestore.instance.collection('classes').get().then((snap) {
+      if (!mounted || snap.docs.isEmpty) return;
+      final lowerHint = hint.toLowerCase();
+      for (final doc in snap.docs) {
+        final data = doc.data();
+        final subj = (data['subject'] ?? '').toString().trim().toLowerCase();
+        final cls = (data['name'] ?? '').toString().trim().toLowerCase();
+        if ((subj.isNotEmpty && lowerHint.contains(subj)) ||
+            (cls.isNotEmpty && lowerHint.contains(cls))) {
+          setState(() {
+            _selectedClass = data['name']?.toString().trim();
+            _selectedGroup = data['department']?.toString().trim();
+            _selectedSubDept = data['subDepartment']?.toString().trim() ?? 'General';
+            _matchedClassDocId = doc.id;
+            _selectedSubjectName = data['subject']?.toString().trim();
+          });
+          break;
+        }
+      }
+    });
+  }
+
   Future<void> _generateAiSuggestionWithUpload(String type) async {
+    if (!AiMcqService.isConfigured) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Need GEMINI_API_KEY.\n'
+            'Add keys via the AI Engine & API Pool card above.',
+          ),
+          duration: Duration(seconds: 5),
+        ),
+      );
+      return;
+    }
+
     try {
-      final file = await FilePicker.pickFile(
+      final pickedFiles = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: const ['png', 'jpg', 'jpeg', 'webp', 'pdf'],
       );
-      if (file == null) return;
+      if (pickedFiles.isEmpty) return;
+      final file = pickedFiles.first;
 
-      final bytes = await file.readAsBytes() as Uint8List;
+      final bytes = await file.readAsBytes();
       if (bytes.isEmpty) return;
 
       final name = file.name;
@@ -242,9 +640,11 @@ class _TeacherSuggestionScreenState extends State<TeacherSuggestionScreen> {
           _bodyCtrl.text = sb.toString().trim();
         });
 
+        _autoMatchClassification('${cqData.title} ${cqData.passage}');
+
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('AI successfully generated CQ suggestion from file! Select target class options to publish.')),
+            const SnackBar(content: Text('AI successfully generated CQ suggestion from file! Classification matched.')),
           );
         }
       } else {
@@ -267,9 +667,11 @@ class _TeacherSuggestionScreenState extends State<TeacherSuggestionScreen> {
           _bodyCtrl.text = sb.toString().trim();
         });
 
+        _autoMatchClassification('${shortData.title} ${shortData.subject}');
+
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('AI successfully generated Short suggestion from file! Select target class options to publish.')),
+            const SnackBar(content: Text('AI successfully generated Short suggestion from file! Classification matched.')),
           );
         }
       }
@@ -282,76 +684,6 @@ class _TeacherSuggestionScreenState extends State<TeacherSuggestionScreen> {
     } finally {
       if (mounted) setState(() => _generatingAi = false);
     }
-  }
-
-  /// Cross-platform safe HTML generation with Noto Sans Bengali support
-  String _buildSuggestionHtml() {
-    final title = _titleCtrl.text.trim().isEmpty ? 'Suggestion' : _titleCtrl.text.trim();
-    final body = _bodyCtrl.text.trim();
-    final subjectName = _selectedSubjectName ?? 'Academic Suggestion';
-    final className = _selectedClass ?? 'HSC / SSC';
-    final groupName = _selectedGroup ?? 'General';
-    final formattedBodyHtml = const HtmlEscape().convert(body).replaceAll('\n', '<br>');
-
-    return '''
-<!DOCTYPE html>
-<html lang="bn">
-<head>
-  <meta charset="utf-8">
-  <title>${const HtmlEscape().convert(title)}</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <style>
-    @page { size: A4 portrait; margin: 20mm; }
-    body {
-      font-family: 'Noto Sans Bengali', Arial, sans-serif;
-      color: #111;
-      line-height: 1.6;
-      font-size: 14px;
-      background: #fff;
-    }
-    .header {
-      text-align: center;
-      border-bottom: 2px solid #1a365d;
-      padding-bottom: 12px;
-      margin-bottom: 20px;
-    }
-    .title {
-      font-size: 22px;
-      font-weight: bold;
-      color: #1a365d;
-      margin: 0 0 6px 0;
-    }
-    .meta {
-      font-size: 12px;
-      color: #555;
-      font-weight: bold;
-    }
-    .content {
-      padding: 10px 0;
-      word-break: break-word;
-    }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <div class="title">${const HtmlEscape().convert(title)}</div>
-    <div class="meta">Subject: $subjectName | Class: $className | Dept: $groupName</div>
-  </div>
-  <div class="content">$formattedBodyHtml</div>
-</body>
-</html>
-''';
-  }
-
-  /// Previously this method stored raw HTML bytes under a .pdf name,
-  /// which produced the "We can't open this file" error.
-  /// PDF is now generated only at download time via printOrExportHtml
-  /// (real PDF on mobile via Printing package, proper print-to-PDF on web).
-  Future<void> _convertTextToPdfAttachment() async {
-    // No-op: do NOT store HTML as a fake PDF.
-    // Keeping the method so existing call sites continue to compile.
-    return;
   }
 
   Future<void> _publish() async {
@@ -389,10 +721,6 @@ class _TeacherSuggestionScreenState extends State<TeacherSuggestionScreen> {
 
     setState(() => _publishing = true);
     try {
-      if (_attachmentType != 'pdf' && body.isNotEmpty) {
-        await _convertTextToPdfAttachment();
-      }
-
       final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
       final data = <String, dynamic>{
         'title': title.isEmpty ? 'Untitled' : title,
@@ -895,6 +1223,8 @@ class _TeacherSuggestionScreenState extends State<TeacherSuggestionScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    const AiPoolStatusCard(),
+                    const SizedBox(height: 20),
                     Wrap(
                       spacing: 12,
                       runSpacing: 8,

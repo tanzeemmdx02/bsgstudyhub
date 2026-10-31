@@ -2,21 +2,26 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../services/auth_service.dart';
 import '../theme/app_theme.dart';
 import 'video_watch_screen.dart';
 
 class StudentCourseScreen extends StatelessWidget {
   const StudentCourseScreen({super.key});
 
+  User? get _currentUser =>
+      FirebaseAuth.instance.currentUser ?? AuthService().firebaseUser;
+
   Future<void> _hideCourse(
       BuildContext context, String courseId, String courseTitle) async {
-    final user = FirebaseAuth.instance.currentUser;
+    final user = _currentUser;
     if (user == null) return;
 
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Remove Course'),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Remove Course', style: TextStyle(fontWeight: FontWeight.bold)),
         content: Text('Are you sure you want to remove "$courseTitle" from your dashboard?'),
         actions: [
           TextButton(
@@ -43,7 +48,7 @@ class StudentCourseScreen extends StatelessWidget {
       // 1. Delete if it exists in enrolled_courses
       await userRef.collection('enrolled_courses').doc(courseId).delete();
 
-      // 2. Add to hidden/excluded list so auto-enroll free items don't bring it back
+      // 2. Add to hidden list so auto-enroll does not bring it back
       await userRef.set({
         'hidden_courses': FieldValue.arrayUnion([courseId])
       }, SetOptions(merge: true));
@@ -60,9 +65,38 @@ class StudentCourseScreen extends StatelessWidget {
     }
   }
 
+  bool _matchesStudentProfile(Map<String, dynamic> courseData, Map<String, dynamic>? studentData) {
+    if (studentData == null) return false;
+
+    final cClass = courseData['class']?.toString().trim();
+    final cGroup = courseData['department']?.toString().trim() ?? courseData['group']?.toString().trim();
+    final cSubDept = courseData['subDepartment']?.toString().trim();
+    final cSubject = courseData['subject']?.toString().trim();
+
+    final sClass = studentData['class']?.toString().trim();
+    final sGroup = studentData['group']?.toString().trim();
+    final sSubDept = studentData['subDepartment']?.toString().trim();
+    final sSubject = studentData['subject']?.toString().trim();
+
+    if (cClass != null && cClass.isNotEmpty && cClass != 'General' && cClass != sClass) {
+      return false;
+    }
+    if (cGroup != null && cGroup.isNotEmpty && cGroup != 'General' && cGroup != sGroup) {
+      return false;
+    }
+    if (cSubDept != null && cSubDept.isNotEmpty && cSubDept != 'General' && cSubDept != sSubDept) {
+      return false;
+    }
+    if (cSubject != null && cSubject.isNotEmpty && cSubject != 'General' && cSubject != sSubject) {
+      return false;
+    }
+
+    return true;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
+    final user = _currentUser;
 
     if (user == null) {
       return Scaffold(
@@ -113,13 +147,14 @@ class StudentCourseScreen extends StatelessWidget {
 
                   final allCourses = coursesSnap.data?.docs ?? [];
 
-                  // Filter courses: must not be hidden, and must be either enrolled or free (with autoEnroll)
+                  // Filter courses: must not be hidden, and must be either enrolled or free matching profile
                   final savedCourses = allCourses.where((doc) {
                     if (hiddenCourses.contains(doc.id)) return false;
                     final data = doc.data() as Map<String, dynamic>;
                     final isFree = data['isFree'] ?? true;
+                    final matchesProfile = _matchesStudentProfile(data, userData);
                     return enrolledIds.contains(doc.id) ||
-                        (autoEnrollFree && isFree);
+                        (autoEnrollFree && isFree && matchesProfile);
                   }).toList();
 
                   if (savedCourses.isEmpty) {
@@ -161,6 +196,10 @@ class StudentCourseScreen extends StatelessWidget {
                       final isFree = data['isFree'] ?? true;
                       final price = (data['price'] ?? 0.0).toDouble();
                       final videoCount = data['videoCount'] ?? 0;
+                      final className = data['class'];
+                      final dept = data['department'] ?? data['group'];
+                      final subject = data['subject'];
+                      final teacherName = data['teacherName'];
 
                       return Card(
                         elevation: 2,
@@ -211,15 +250,24 @@ class StudentCourseScreen extends StatelessWidget {
                                               fontSize: 16,
                                             ),
                                           ),
-                                          if (desc.isNotEmpty) ...[
+                                          if (className != null) ...[
                                             const SizedBox(height: 2),
                                             Text(
-                                              desc,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
+                                              'Class: $className • Dept: ${dept ?? 'General'} • Subject: ${subject ?? 'General'}',
                                               style: const TextStyle(
-                                                fontSize: 12,
-                                                color: AppTheme.textMuted,
+                                                fontSize: 11.5,
+                                                fontWeight: FontWeight.bold,
+                                                color: AppTheme.royalBlue,
+                                              ),
+                                            ),
+                                          ],
+                                          if (teacherName != null) ...[
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              'Instructor: $teacherName',
+                                              style: const TextStyle(
+                                                fontSize: 11,
+                                                color: Colors.black87,
                                               ),
                                             ),
                                           ],
@@ -245,6 +293,18 @@ class StudentCourseScreen extends StatelessWidget {
                                     ),
                                   ],
                                 ),
+                                if (desc.isNotEmpty) ...[
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    desc,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: AppTheme.textMuted,
+                                    ),
+                                  ),
+                                ],
                                 const Divider(height: 20),
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -301,6 +361,16 @@ class _StudentCourseVideosPage extends StatelessWidget {
 
   const _StudentCourseVideosPage({required this.courseId, required this.title});
 
+  bool _isDirectVideo(String url) {
+    final lower = url.toLowerCase();
+    return lower.contains('github.com') ||
+        lower.endsWith('.mp4') ||
+        lower.endsWith('.webm') ||
+        lower.endsWith('.mov') ||
+        lower.endsWith('.mkv') ||
+        lower.contains('objects.githubusercontent.com');
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -318,7 +388,7 @@ class _StudentCourseVideosPage extends StatelessWidget {
           }
           final videos = snap.data?.docs ?? [];
           if (videos.isEmpty) {
-            return const Center(child: Text('No videos in this course.'));
+            return const Center(child: Text('No videos in this course yet.'));
           }
           return ListView.separated(
             padding: const EdgeInsets.all(16),
@@ -329,27 +399,84 @@ class _StudentCourseVideosPage extends StatelessWidget {
               final v = vDoc.data() as Map<String, dynamic>;
               final vTitle = v['title']?.toString() ?? 'Video ${i + 1}';
               final url = v['url']?.toString() ?? '';
-              final duration = v['duration']?.toString() ?? '';
+              final duration = v['duration']?.toString() ?? '30m';
+              final desc = v['description']?.toString() ?? '';
+              final thumb = v['thumbnail']?.toString() ?? '';
+              final isDirect = v['isDirectVideo'] == true || _isDirectVideo(url);
 
               return Card(
+                margin: const EdgeInsets.only(bottom: 6),
                 child: ListTile(
-                  leading: const Icon(Icons.play_circle_fill, color: AppTheme.royalBlue, size: 36),
-                  title: Text(vTitle, style: const TextStyle(fontWeight: FontWeight.w700)),
-                  subtitle: duration.isNotEmpty ? Text('Duration: $duration', style: const TextStyle(fontSize: 11)) : null,
-                  trailing: const Icon(Icons.chevron_right, size: 20),
-                  onTap: url.isEmpty ? null : () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => VideoWatchScreen(
-                          courseId: courseId,
-                          videoId: vDoc.id,
-                          title: vTitle,
-                          youtubeUrl: url,
+                  contentPadding: const EdgeInsets.all(8),
+                  leading: Stack(
+                    alignment: Alignment.bottomRight,
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: thumb.isNotEmpty
+                            ? Image.network(
+                                thumb,
+                                width: 80,
+                                height: 48,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => Container(
+                                  width: 80,
+                                  height: 48,
+                                  color: AppTheme.royalBlue,
+                                  child: const Icon(Icons.play_arrow, color: Colors.white, size: 16),
+                                ),
+                              )
+                            : Container(
+                                width: 80,
+                                height: 48,
+                                color: AppTheme.royalBlue,
+                                child: const Icon(Icons.play_arrow, color: Colors.white, size: 16),
+                              ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                        margin: const EdgeInsets.all(2),
+                        decoration: BoxDecoration(
+                          color: isDirect ? Colors.blue.shade900 : Colors.red.shade900,
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                        child: Text(
+                          isDirect ? 'IN-APP' : 'YT',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 8,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
-                    );
-                  },
+                    ],
+                  ),
+                  title: Text(
+                    vTitle,
+                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5),
+                  ),
+                  subtitle: Text(
+                    '$duration${desc.isNotEmpty ? ' • $desc' : ''}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 11.5),
+                  ),
+                  trailing: const Icon(Icons.chevron_right, size: 20),
+                  onTap: url.isEmpty
+                      ? null
+                      : () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => VideoWatchScreen(
+                                courseId: courseId,
+                                videoId: vDoc.id,
+                                title: vTitle,
+                                youtubeUrl: url,
+                              ),
+                            ),
+                          );
+                        },
                 ),
               );
             },
